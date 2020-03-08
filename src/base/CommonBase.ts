@@ -18,7 +18,7 @@ interface CommonProps {
 
 
 
-export default class Common implements CommonProps {
+export default class CommonBase implements CommonProps {
 
   get(property: string): any {
     return (this as any)[property];
@@ -31,6 +31,7 @@ export default class Common implements CommonProps {
    * @return {fabric.Object} thisArg
    * @chainable
    */
+  // fixme: it is dangerous to set everything !!!
   set(key: any, value: any) {
     if (typeof key === 'object') {
       this._setObject(key);
@@ -54,7 +55,7 @@ export default class Common implements CommonProps {
   }
 
 
-
+  // fixme: it is dangerous to set everything
   protected _setOptions(options: any) {
     for (let prop in options) {
       this.set(prop, options[prop]);
@@ -93,13 +94,13 @@ export default class Common implements CommonProps {
     (this as any)[key] = value;
   }
 
+
+  // fixme: it is dangerous to set everything !!!
   private _setObject(obj: any) {
     for (let prop in obj) {
       this._set(prop, obj[prop]);
     }
   }
-
-
 
 
 }

@@ -6,6 +6,11 @@
  * @return {String} Function body
  */
 export function getFunctionBody(fn: Function) {
-  return (String(fn).match(/function[^{]*\{([\s\S]*)\}/) || {})[1];
+  const str = String(fn);
+  const match = str.match(/function[^{]*\{([\s\S]*)\}/);
+  if (match && match[1]) {
+    return match[1];
+  }
+  return undefined;
 }
 
