@@ -14,3 +14,4 @@ export const CACHE_PROPERTIES = (
 
 export const ALIASING_LIMIT = 2;
 
+export const noop = () => {};
