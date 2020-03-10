@@ -1,7 +1,8 @@
 import CommonBase from '../base/CommonBase';
 import { noop } from '../base/constant';
 import { getConfig } from '../base/global';
-import { getElementOffset, addClass, transformPoint } from '../base/util';
+import { getElementOffset, addClass, transformPoint, invertTransform } from '../base/util';
+import Point from '../base/Point';
 
 
 export default class FabricStaticCanvas extends CommonBase{
@@ -184,17 +185,19 @@ export default class FabricStaticCanvas extends CommonBase{
 
   
   private _objects: any[] = [];
-  private _activeObject: any[] = [];
+  private _activeObject: any;
   private interactive: boolean = false;
   private lowerCanvasEl: HTMLCanvasElement;
   private upperCanvasEl: HTMLCanvasElement;
   private cacheCanvasEl: HTMLCanvasElement;
+  private wrapperEl: HTMLElement;
   private width: number = 0;
   private height: number = 0;
   private _offset: any = {left: 0, top: 0};
   private contextContainer: CanvasRenderingContext2D;
   private _isCurrentlyDrawing: boolean = false;
   private freeDrawingBrush: any;
+  private isRendering: number = 0;
   private hasLostContext: boolean = false;
 
 
@@ -206,7 +209,14 @@ export default class FabricStaticCanvas extends CommonBase{
    */
   constructor(el: HTMLElement, options: any = {}) {
     super();
-    this._initStatic(el, options);
+    this._initStatic(options);
+    // MOUNT canvas to el;
+    if (el) {
+      el.appendChild(this.lowerCanvasEl);
+      this.wrapperEl = this.lowerCanvasEl;
+    }
+
+
   }
 
   renderAndResetBound = () => {
@@ -299,23 +309,23 @@ export default class FabricStaticCanvas extends CommonBase{
    * @return {fabric.Canvas} thisArg
    * @chainable
    */
-  setDimensions(dimensions: any, options: any) {
-    var cssValue;
-
+  setDimensions(dimensions: {width?: number; height?: number}, options: any) {
+    
     options = options || {};
 
-    for (var prop in dimensions) {
-      cssValue = dimensions[prop];
-
+    for (let prop in dimensions) {
+      let value = (dimensions as any)[prop];
+      if (!value || (prop !== 'width' && prop !== 'height')) {
+        break;
+      }
       // FIX ME: hasLostContext is buggy!!!
       if (!options.cssOnly) {
-        this._setBackstoreDimension(prop, dimensions[prop]);
-        cssValue += 'px';
+        this._setBackstoreDimension(prop, value);
         this.hasLostContext = true;
       }
 
       if (!options.backstoreOnly) {
-        this._setCssDimension(prop, cssValue);
+        this._setCssDimension(prop, value);
       }
     }
     if (this._isCurrentlyDrawing) {
@@ -387,7 +397,7 @@ export default class FabricStaticCanvas extends CommonBase{
    * @chainable true
    */
   setZoom(value: number) {
-    // this.zoomToPoint(new fabric.Point(0, 0), value);
+    this.zoomToPoint(new Point(0, 0), value);
     return this;
   }
 
@@ -410,11 +420,11 @@ export default class FabricStaticCanvas extends CommonBase{
    * @return {fabric.Canvas} instance
    * @chainable true
    */
-  relativePan(point: any) {
-    // return this.absolutePan(new fabric.Point(
-    //   -point.x - this.viewportTransform[4],
-    //   -point.y - this.viewportTransform[5]
-    // ));
+  relativePan(point: Point) {
+    return this.absolutePan(new Point(
+      -point.x - this.viewportTransform[4],
+      -point.y - this.viewportTransform[5]
+    ));
   }
 
   /**
@@ -467,13 +477,47 @@ export default class FabricStaticCanvas extends CommonBase{
   }
 
 
+  /**
+   * Calculate the position of the 4 corner of canvas with current viewportTransform.
+   * helps to determinate when an object is in the current rendering viewport using
+   * object absolute coordinates ( aCoords )
+   * @return {Object} points.tl
+   * @chainable
+   */
+  calcViewportBoundaries() {
+    var points: any = { }, width = this.width, height = this.height,
+        iVpt = invertTransform(this.viewportTransform);
+    points.tl = transformPoint({ x: 0, y: 0 } as Point, iVpt);
+    points.br = transformPoint({ x: width, y: height } as Point, iVpt);
+    points.tr = new Point(points.br.x, points.tl.y);
+    points.bl = new Point(points.tl.x, points.br.y);
+    this.vptCoords = points;
+    return points;
+  }
+
+  /**
+   * Append a renderAll request to next animation frame.
+   * unless one is already in progress, in that case nothing is done
+   * a boolean flag will avoid appending more.
+   * @return {fabric.Canvas} instance
+   * @chainable
+   */
+  requestRenderAll() {
+    if (!this.isRendering) {
+      this.isRendering = window.requestAnimationFrame(this.renderAndResetBound);
+    }
+    return this;
+  }
+
+
+
   // FIXME: really not necessary to set a canvas element into it
   // Container element is Good Enough
-  private _initStatic(el: HTMLElement, options: any) {
+  private _initStatic(options: any) {
     // TODO: mount canvas container into el
 
     const cb = this.requestRenderAllBound;
-    this._createLowerCanvas(el);
+    this._createLowerCanvas();
     
     this._initOptions(options);
     this._setImageSmoothing();
@@ -526,9 +570,6 @@ export default class FabricStaticCanvas extends CommonBase{
    */
   private _setImageSmoothing() {
     var ctx = this.getContext();
-
-    ctx.imageSmoothingEnabled = ctx.imageSmoothingEnabled || ctx.webkitImageSmoothingEnabled
-      || ctx.mozImageSmoothingEnabled || ctx.msImageSmoothingEnabled || ctx.oImageSmoothingEnabled;
     ctx.imageSmoothingEnabled = this.imageSmoothingEnabled;
   };
 
@@ -600,13 +641,8 @@ export default class FabricStaticCanvas extends CommonBase{
     this.viewportTransform = this.viewportTransform.slice();
   }
 
-  private _createLowerCanvas(canvasEl: HTMLCanvasElement) {
-    // canvasEl === 'HTMLCanvasElement' does not work on jsdom/node
-    if (canvasEl && canvasEl.getContext) {
-      this.lowerCanvasEl = canvasEl;
-    } else {
-      this.lowerCanvasEl = document.createElement('canvas');
-    }
+  private _createLowerCanvas() {
+    this.lowerCanvasEl = document.createElement('canvas');
     addClass(this.lowerCanvasEl, 'lower-canvas');
     if (this.interactive) {
       this._applyCanvasStyle(this.lowerCanvasEl);
@@ -646,15 +682,15 @@ export default class FabricStaticCanvas extends CommonBase{
    * @return {fabric.Canvas} instance
    * @chainable true
    */
-  private _setCssDimension(prop: 'width' | 'height', value: string) {
-    this.lowerCanvasEl.style[prop] = value;
+  private _setCssDimension(prop: 'width' | 'height', value: number) {
+    this.lowerCanvasEl.style[prop] = value + 'px';
 
     if (this.upperCanvasEl) {
-      this.upperCanvasEl.style[prop] = value;
+      this.upperCanvasEl.style[prop] = value + 'px';
     }
 
     if (this.wrapperEl) {
-      this.wrapperEl.style[prop] = value;
+      this.wrapperEl.style[prop] = value + 'px';
     }
 
     return this;

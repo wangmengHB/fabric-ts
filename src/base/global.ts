@@ -51,12 +51,6 @@ export function setConfig(prop: string, val: any) {
 fabric.isTouchSupported = 'ontouchstart' in window || 'ontouchstart' in document ||
   (window && window.navigator && window.navigator.maxTouchPoints > 0);
 
-/**
- * True when in environment that's probably Node.js
- * @type boolean
- */
-fabric.isLikelyNode = typeof Buffer !== 'undefined' &&
-                      typeof window === 'undefined';
 
 /* _FROM_SVG_START_ */
 /**
@@ -112,6 +106,23 @@ fabric.minCacheSideLimit = 256;
  * Cache Object for widths of chars in text rendering.
  */
 fabric.charWidthsCache = { };
+
+/**
+ * Default SVG font size
+ * @static
+ * @memberOf fabric.Text
+ */
+fabric.DEFAULT_SVG_FONT_SIZE = 16;
+
+/**
+ * Defines the number of fraction digits to use when serializing object values.
+ * You can use it to increase/decrease precision of such values like left, top, scaleX, scaleY, etc.
+ * @static
+ * @memberOf fabric.Object
+ * @constant
+ * @type Number
+ */
+fabric.NUM_FRACTION_DIGITS = 2;
 
 /**
  * if webgl is enabled and available, textureSize will determine the size
