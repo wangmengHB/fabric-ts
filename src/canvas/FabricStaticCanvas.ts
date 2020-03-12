@@ -1,11 +1,19 @@
-import CommonBase from '../base/CommonBase';
+import CommonMethod from '../mixins/CommonMethod';
+import Collection from '../mixins/Collection';
 import { noop } from '../base/constant';
 import { getConfig } from '../base/global';
-import { getElementOffset, addClass, transformPoint, invertTransform } from '../base/util';
+import { 
+  getElementOffset, addClass, transformPoint, invertTransform,
+  clipContext, populateWithProperties, removeFromArray, extend,
+  applyMixins,
+} from '../base/util';
 import Point from '../base/Point';
 
 
-export default class FabricStaticCanvas extends CommonBase{
+
+
+
+export default class FabricStaticCanvas extends Collection {
 
   /**
    * Background color of canvas instance.
@@ -13,7 +21,7 @@ export default class FabricStaticCanvas extends CommonBase{
    * @type {(String|fabric.Pattern)}
    * @default
    */
-  backgroundColor = '';
+  backgroundColor: any = '';
 
   /**
    * Background image of canvas instance.
@@ -27,7 +35,7 @@ export default class FabricStaticCanvas extends CommonBase{
    * @type fabric.Image
    * @default
    */
-  backgroundImage = null;
+  backgroundImage: any = null;
 
   /**
    * Overlay color of canvas instance.
@@ -36,7 +44,7 @@ export default class FabricStaticCanvas extends CommonBase{
    * @type {(String|fabric.Pattern)}
    * @default
    */
-  overlayColor = '';
+  overlayColor: any = '';
 
   /**
    * Overlay image of canvas instance.
@@ -50,7 +58,7 @@ export default class FabricStaticCanvas extends CommonBase{
    * @type fabric.Image
    * @default
    */
-  overlayImage = null;
+  overlayImage: any = null;
 
   /**
    * Indicates whether toObject/toDatalessObject should include default values
@@ -181,7 +189,7 @@ export default class FabricStaticCanvas extends CommonBase{
    * clipPath will clip away controls, if you do not want this to happen use controlsAboveOverlay = true
    * @type fabric.Object
    */
-  clipPath = undefined;
+  clipPath: any = undefined;
 
   
   private _objects: any[] = [];
@@ -213,7 +221,7 @@ export default class FabricStaticCanvas extends CommonBase{
     // MOUNT canvas to el;
     if (el) {
       el.appendChild(this.lowerCanvasEl);
-      this.wrapperEl = this.lowerCanvasEl;
+      // this.wrapperEl = this.lowerCanvasEl;
     }
 
 
@@ -496,6 +504,32 @@ export default class FabricStaticCanvas extends CommonBase{
   }
 
   /**
+   * Renders the canvas
+   * @return {fabric.Canvas} instance
+   * @chainable
+   */
+  renderAll() {
+    var canvasToDrawOn = this.contextContainer;
+    this.renderCanvas(canvasToDrawOn, this._objects);
+    return this;
+  }
+
+  /**
+   * Function created to be instance bound at initialization
+   * used in requestAnimationFrame rendering
+   * Let the fabricJS call it. If you call it manually you could have more
+   * animationFrame stacking on to of each other
+   * for an imperative rendering, use canvas.renderAll
+   * @private
+   * @return {fabric.Canvas} instance
+   * @chainable
+   */
+  renderAndReset() {
+    this.isRendering = 0;
+    this.renderAll();
+  }
+
+  /**
    * Append a renderAll request to next animation frame.
    * unless one is already in progress, in that case nothing is done
    * a boolean flag will avoid appending more.
@@ -508,6 +542,613 @@ export default class FabricStaticCanvas extends CommonBase{
     }
     return this;
   }
+
+  cancelRequestedRender() {
+    if (this.isRendering) {
+      window.cancelAnimationFrame(this.isRendering);
+      this.isRendering = 0;
+    }
+  }
+
+  /**
+   * Renders background, objects, overlay and controls.
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {Array} objects to render
+   * @return {fabric.Canvas} instance
+   * @chainable
+   */
+  renderCanvas(ctx: CanvasRenderingContext2D, objects: any[]) {
+    var v = this.viewportTransform, path = this.clipPath;
+    this.cancelRequestedRender();
+    this.calcViewportBoundaries();
+    this.clearContext(ctx);
+    this.fire('before:render', { ctx: ctx, });
+    if (this.clipTo) {
+      clipContext(this, ctx);
+    }
+    this._renderBackground(ctx);
+
+    ctx.save();
+    //apply viewport transform once for all rendering process
+    ctx.transform(v[0], v[1], v[2], v[3], v[4], v[5]);
+    this._renderObjects(ctx, objects);
+    ctx.restore();
+    if (!this.controlsAboveOverlay && this.interactive) {
+      this.drawControls(ctx);
+    }
+    if (this.clipTo) {
+      ctx.restore();
+    }
+    if (path) {
+      path.canvas = this;
+      // needed to setup a couple of variables
+      path.shouldCache();
+      path._transformDone = true;
+      path.renderCache({ forClipping: true });
+      this.drawClipPathOnCanvas(ctx);
+    }
+    this._renderOverlay(ctx);
+    if (this.controlsAboveOverlay && this.interactive) {
+      this.drawControls(ctx);
+    }
+    this.fire('after:render', { ctx: ctx, });
+  }
+
+  /**
+   * Paint the cached clipPath on the lowerCanvasEl
+   * @param {CanvasRenderingContext2D} ctx Context to render on
+   */
+  drawClipPathOnCanvas(ctx: CanvasRenderingContext2D) {
+    var v = this.viewportTransform, path = this.clipPath;
+    ctx.save();
+    ctx.transform(v[0], v[1], v[2], v[3], v[4], v[5]);
+    // DEBUG: uncomment this line, comment the following
+    // ctx.globalAlpha = 0.4;
+    ctx.globalCompositeOperation = 'destination-in';
+    path.transform(ctx);
+    ctx.scale(1 / path.zoomX, 1 / path.zoomY);
+    ctx.drawImage(path._cacheCanvas, -path.cacheTranslationX, -path.cacheTranslationY);
+    ctx.restore();
+  }
+
+  /**
+   * @private
+   * @param {CanvasRenderingContext2D} ctx Context to render on
+   * @param {Array} objects to render
+   */
+  _renderObjects(ctx: CanvasRenderingContext2D, objects: any[]) {
+    var i, len;
+    for (i = 0, len = objects.length; i < len; ++i) {
+      objects[i] && objects[i].render(ctx);
+    }
+  }
+
+  /**
+   * @private
+   * @param {CanvasRenderingContext2D} ctx Context to render on
+   * @param {string} property 'background' or 'overlay'
+   */
+  _renderBackgroundOrOverlay(ctx: CanvasRenderingContext2D, property: string) {
+    var fill = (this as any)[property + 'Color'], object = (this as any)[property + 'Image'],
+        v = this.viewportTransform, needsVpt = (this as any)[property + 'Vpt'];
+    if (!fill && !object) {
+      return;
+    }
+    if (fill) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(this.width, 0);
+      ctx.lineTo(this.width, this.height);
+      ctx.lineTo(0, this.height);
+      ctx.closePath();
+      ctx.fillStyle = fill.toLive
+        ? fill.toLive(ctx, this)
+        : fill;
+      if (needsVpt) {
+        ctx.transform(
+          v[0], v[1], v[2], v[3],
+          v[4] + (fill.offsetX || 0),
+          v[5] + (fill.offsetY || 0)
+        );
+      }
+      var m = fill.gradientTransform || fill.patternTransform;
+      m && ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+      ctx.fill();
+      ctx.restore();
+    }
+    if (object) {
+      ctx.save();
+      if (needsVpt) {
+        ctx.transform(v[0], v[1], v[2], v[3], v[4], v[5]);
+      }
+      object.render(ctx);
+      ctx.restore();
+    }
+  }
+
+  /**
+   * @private
+   * @param {CanvasRenderingContext2D} ctx Context to render on
+   */
+  _renderBackground(ctx: CanvasRenderingContext2D) {
+    this._renderBackgroundOrOverlay(ctx, 'background');
+  }
+
+  /**
+   * @private
+   * @param {CanvasRenderingContext2D} ctx Context to render on
+   */
+  _renderOverlay(ctx: CanvasRenderingContext2D) {
+    this._renderBackgroundOrOverlay(ctx, 'overlay');
+  }
+
+  /**
+   * Returns coordinates of a center of canvas.
+   * Returned value is an object with top and left properties
+   * @return {Object} object with "top" and "left" number values
+   */
+  getCenter() {
+    return {
+      top: this.height / 2,
+      left: this.width / 2
+    };
+  }
+
+  /**
+   * Centers object horizontally in the canvas
+   * @param {fabric.Object} object Object to center horizontally
+   * @return {fabric.Canvas} thisArg
+   */
+  centerObjectH(object: any) {
+    return this._centerObject(object, new Point(this.getCenter().left, object.getCenterPoint().y));
+  }
+
+  /**
+   * Centers object vertically in the canvas
+   * @param {fabric.Object} object Object to center vertically
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  centerObjectV(object: any) {
+    return this._centerObject(object, new Point(object.getCenterPoint().x, this.getCenter().top));
+  }
+
+  /**
+   * Centers object vertically and horizontally in the canvas
+   * @param {fabric.Object} object Object to center vertically and horizontally
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  centerObject(object: any) {
+    var center = this.getCenter();
+
+    return this._centerObject(object, new Point(center.left, center.top));
+  }
+
+  /**
+   * Centers object vertically and horizontally in the viewport
+   * @param {fabric.Object} object Object to center vertically and horizontally
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  viewportCenterObject(object: any) {
+    var vpCenter = this.getVpCenter();
+
+    return this._centerObject(object, vpCenter);
+  }
+
+  /**
+   * Centers object horizontally in the viewport, object.top is unchanged
+   * @param {fabric.Object} object Object to center vertically and horizontally
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  viewportCenterObjectH(object: any) {
+    var vpCenter = this.getVpCenter();
+    this._centerObject(object, new Point(vpCenter.x, object.getCenterPoint().y));
+    return this;
+  }
+
+  /**
+   * Centers object Vertically in the viewport, object.top is unchanged
+   * @param {fabric.Object} object Object to center vertically and horizontally
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  viewportCenterObjectV(object: any) {
+    var vpCenter = this.getVpCenter();
+
+    return this._centerObject(object, new Point(object.getCenterPoint().x, vpCenter.y));
+  }
+
+  /**
+   * Calculate the point in canvas that correspond to the center of actual viewport.
+   * @return {fabric.Point} vpCenter, viewport center
+   * @chainable
+   */
+  getVpCenter() {
+    var center = this.getCenter(),
+        iVpt = invertTransform(this.viewportTransform);
+    return transformPoint({ x: center.left, y: center.top } as Point, iVpt);
+  }
+
+  /**
+   * @private
+   * @param {fabric.Object} object Object to center
+   * @param {fabric.Point} center Center point
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  _centerObject(object: any, center: Point) {
+    object.setPositionByOrigin(center, 'center', 'center');
+    object.setCoords();
+    this.renderOnAddRemove && this.requestRenderAll();
+    return this;
+  }
+
+
+
+
+  /**
+   * Returs dataless JSON representation of canvas
+   * @param {Array} [propertiesToInclude] Any properties that you might want to additionally include in the output
+   * @return {String} json string
+   */
+  toDatalessJSON(propertiesToInclude: any[]) {
+    return this.toDatalessObject(propertiesToInclude);
+  }
+
+  /**
+   * Returns object representation of canvas
+   * @param {Array} [propertiesToInclude] Any properties that you might want to additionally include in the output
+   * @return {Object} object representation of an instance
+   */
+  toObject(propertiesToInclude: any[]) {
+    return this._toObjectMethod('toObject', propertiesToInclude);
+  }
+
+  /**
+   * Returns dataless object representation of canvas
+   * @param {Array} [propertiesToInclude] Any properties that you might want to additionally include in the output
+   * @return {Object} object representation of an instance
+   */
+  toDatalessObject(propertiesToInclude: any[]) {
+    return this._toObjectMethod('toDatalessObject', propertiesToInclude);
+  }
+
+  /**
+   * @private
+   */
+  _toObjectMethod(methodName: string, propertiesToInclude: any[]) {
+
+    var clipPath = this.clipPath, data: any = {
+      version: '0.0.1',
+      objects: this._toObjects(methodName, propertiesToInclude),
+    };
+    if (clipPath) {
+      data.clipPath = this._toObject(this.clipPath, methodName, propertiesToInclude);
+    }
+    extend(data, this.__serializeBgOverlay(methodName, propertiesToInclude));
+
+    populateWithProperties(this, data, propertiesToInclude);
+
+    return data;
+  }
+
+  /**
+   * @private
+   */
+  _toObjects(methodName: string, propertiesToInclude: any[]) {
+    return this._objects.filter(function(object) {
+      return !object.excludeFromExport;
+    }).map((instance) => {
+      return this._toObject(instance, methodName, propertiesToInclude);
+    });
+  }
+
+  /**
+   * @private
+   */
+  _toObject(instance: any, methodName: string, propertiesToInclude: any[]) {
+    var originalValue;
+
+    if (!this.includeDefaultValues) {
+      originalValue = instance.includeDefaultValues;
+      instance.includeDefaultValues = false;
+    }
+
+    var object = instance[methodName](propertiesToInclude);
+    if (!this.includeDefaultValues) {
+      instance.includeDefaultValues = originalValue;
+    }
+    return object;
+  }
+
+  /**
+   * @private
+   */
+  __serializeBgOverlay(methodName: string, propertiesToInclude: any[]) {
+    var data: any = { }, bgImage = this.backgroundImage, overlay = this.overlayImage;
+
+    if (this.backgroundColor) {
+      data.background = this.backgroundColor.toObject
+        ? this.backgroundColor.toObject(propertiesToInclude)
+        : this.backgroundColor;
+    }
+
+    if (this.overlayColor) {
+      data.overlay = this.overlayColor.toObject
+        ? this.overlayColor.toObject(propertiesToInclude)
+        : this.overlayColor;
+    }
+    if (bgImage && !bgImage.excludeFromExport) {
+      data.backgroundImage = this._toObject(bgImage, methodName, propertiesToInclude);
+    }
+    if (overlay && !overlay.excludeFromExport) {
+      data.overlayImage = this._toObject(overlay, methodName, propertiesToInclude);
+    }
+
+    return data;
+  }
+
+
+  /**
+   * Moves an object or the objects of a multiple selection
+   * to the bottom of the stack of drawn objects
+   * @param {fabric.Object} object Object to send to back
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  sendToBack(object: any) {
+    if (!object) {
+      return this;
+    }
+    var activeSelection = this._activeObject,
+        i, obj, objs;
+    if (object === activeSelection && object.type === 'activeSelection') {
+      objs = activeSelection._objects;
+      for (i = objs.length; i--;) {
+        obj = objs[i];
+        removeFromArray(this._objects, obj);
+        this._objects.unshift(obj);
+      }
+    } else {
+      removeFromArray(this._objects, object);
+      this._objects.unshift(object);
+    }
+    this.renderOnAddRemove && this.requestRenderAll();
+    return this;
+  }
+
+  /**
+   * Moves an object or the objects of a multiple selection
+   * to the top of the stack of drawn objects
+   * @param {fabric.Object} object Object to send
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  bringToFront(object: any) {
+    if (!object) {
+      return this;
+    }
+    var activeSelection = this._activeObject,
+        i, obj, objs;
+    if (object === activeSelection && object.type === 'activeSelection') {
+      objs = activeSelection._objects;
+      for (i = 0; i < objs.length; i++) {
+        obj = objs[i];
+        removeFromArray(this._objects, obj);
+        this._objects.push(obj);
+      }
+    } else {
+      removeFromArray(this._objects, object);
+      this._objects.push(object);
+    }
+    this.renderOnAddRemove && this.requestRenderAll();
+    return this;
+  }
+
+  /**
+   * Moves an object or a selection down in stack of drawn objects
+   * An optional paramter, intersecting allowes to move the object in behind
+   * the first intersecting object. Where intersection is calculated with
+   * bounding box. If no intersection is found, there will not be change in the
+   * stack.
+   * @param {fabric.Object} object Object to send
+   * @param {Boolean} [intersecting] If `true`, send object behind next lower intersecting object
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  sendBackwards(object: any, intersecting?: boolean) {
+    if (!object) {
+      return this;
+    }
+    var activeSelection = this._activeObject,
+        i, obj, idx, newIdx, objs, objsMoved = 0;
+
+    if (object === activeSelection && object.type === 'activeSelection') {
+      objs = activeSelection._objects;
+      for (i = 0; i < objs.length; i++) {
+        obj = objs[i];
+        idx = this._objects.indexOf(obj);
+        if (idx > 0 + objsMoved) {
+          newIdx = idx - 1;
+          removeFromArray(this._objects, obj);
+          this._objects.splice(newIdx, 0, obj);
+        }
+        objsMoved++;
+      }
+    } else {
+      idx = this._objects.indexOf(object);
+      if (idx !== 0) {
+        // if object is not on the bottom of stack
+        newIdx = this._findNewLowerIndex(object, idx, intersecting);
+        removeFromArray(this._objects, object);
+        this._objects.splice(newIdx, 0, object);
+      }
+    }
+    this.renderOnAddRemove && this.requestRenderAll();
+    return this;
+  }
+
+  /**
+   * @private
+   */
+  _findNewLowerIndex(object: any, idx: number, intersecting?: boolean) {
+    var newIdx, i;
+
+    if (intersecting) {
+      newIdx = idx;
+
+      // traverse down the stack looking for the nearest intersecting object
+      for (i = idx - 1; i >= 0; --i) {
+
+        var isIntersecting = object.intersectsWithObject(this._objects[i]) ||
+                              object.isContainedWithinObject(this._objects[i]) ||
+                              this._objects[i].isContainedWithinObject(object);
+
+        if (isIntersecting) {
+          newIdx = i;
+          break;
+        }
+      }
+    }
+    else {
+      newIdx = idx - 1;
+    }
+
+    return newIdx;
+  }
+
+  /**
+   * Moves an object or a selection up in stack of drawn objects
+   * An optional paramter, intersecting allowes to move the object in front
+   * of the first intersecting object. Where intersection is calculated with
+   * bounding box. If no intersection is found, there will not be change in the
+   * stack.
+   * @param {fabric.Object} object Object to send
+   * @param {Boolean} [intersecting] If `true`, send object in front of next upper intersecting object
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  bringForward(object: any, intersecting?: boolean) {
+    if (!object) {
+      return this;
+    }
+    var activeSelection = this._activeObject,
+        i, obj, idx, newIdx, objs, objsMoved = 0;
+
+    if (object === activeSelection && object.type === 'activeSelection') {
+      objs = activeSelection._objects;
+      for (i = objs.length; i--;) {
+        obj = objs[i];
+        idx = this._objects.indexOf(obj);
+        if (idx < this._objects.length - 1 - objsMoved) {
+          newIdx = idx + 1;
+          removeFromArray(this._objects, obj);
+          this._objects.splice(newIdx, 0, obj);
+        }
+        objsMoved++;
+      }
+    } else {
+      idx = this._objects.indexOf(object);
+      if (idx !== this._objects.length - 1) {
+        // if object is not on top of stack (last item in an array)
+        newIdx = this._findNewUpperIndex(object, idx, intersecting);
+        removeFromArray(this._objects, object);
+        this._objects.splice(newIdx, 0, object);
+      }
+    }
+    this.renderOnAddRemove && this.requestRenderAll();
+    return this;
+  }
+
+  /**
+   * @private
+   */
+  _findNewUpperIndex(object: any, idx: number, intersecting?: boolean) {
+    var newIdx, i, len;
+
+    if (intersecting) {
+      newIdx = idx;
+
+      // traverse up the stack looking for the nearest intersecting object
+      for (i = idx + 1, len = this._objects.length; i < len; ++i) {
+
+        var isIntersecting = object.intersectsWithObject(this._objects[i]) ||
+                              object.isContainedWithinObject(this._objects[i]) ||
+                              this._objects[i].isContainedWithinObject(object);
+
+        if (isIntersecting) {
+          newIdx = i;
+          break;
+        }
+      }
+    }
+    else {
+      newIdx = idx + 1;
+    }
+
+    return newIdx;
+  }
+
+  /**
+   * Moves an object to specified level in stack of drawn objects
+   * @param {fabric.Object} object Object to send
+   * @param {Number} index Position to move to
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  moveTo(object: any, index: number) {
+    removeFromArray(this._objects, object);
+    this._objects.splice(index, 0, object);
+    return this.renderOnAddRemove && this.requestRenderAll();
+  }
+
+  /**
+   * Clears a canvas element and dispose objects
+   * @return {fabric.Canvas} thisArg
+   * @chainable
+   */
+  dispose () {
+    // cancel eventually ongoing renders
+    if (this.isRendering) {
+      window.cancelAnimationFrame(this.isRendering);
+      this.isRendering = 0;
+    }
+    // FIXME, later!!!
+    this.forEachObject(function(object) {
+      object.dispose && object.dispose();
+    });
+    this._objects = [];
+    if (this.backgroundImage && this.backgroundImage.dispose) {
+      this.backgroundImage.dispose();
+    }
+    this.backgroundImage = null;
+    if (this.overlayImage && this.overlayImage.dispose) {
+      this.overlayImage.dispose();
+    }
+    this.overlayImage = null;
+    // this._iTextInstances = null;
+    // this.contextContainer = null;
+    // this.lowerCanvasEl = undefined;
+    return this;
+  }
+
+  /**
+   * Returns a string representation of an instance
+   * @return {String} string representation of an instance
+   */
+  toString() {
+    return '#<fabric.Canvas (' + this.complexity() + '): ' +
+              '{ objects: ' + this._objects.length + ' }>';
+  }
+
+
+
+
+
 
 
 
@@ -698,6 +1339,9 @@ export default class FabricStaticCanvas extends CommonBase{
 
 
 
+
+
+
   
 
 
@@ -709,3 +1353,6 @@ export default class FabricStaticCanvas extends CommonBase{
 
 
 }
+
+
+applyMixins(FabricStaticCanvas, [CommonMethod]);
